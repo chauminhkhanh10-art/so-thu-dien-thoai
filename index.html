@@ -65,6 +65,7 @@ tr.sel td{background:var(--hl)}
   <h1>📱 Sổ thu bán điện thoại<small>Dữ liệu lưu trên Google Sheets · <span class="sync" id="sync">chưa kết nối</span></small></h1>
   <div class="tools">
     <button id="cfgBtn">⚙ Kết nối</button>
+    <button id="openSheet" style="display:none">📄 Mở Google Sheets</button>
     <button id="refresh">↻ Làm mới</button>
     <button id="copy">Sao chép sang Excel</button>
     <button id="backup">Sao lưu</button>
@@ -93,7 +94,7 @@ tr.sel td{background:var(--hl)}
     <li><b>Bán máy:</b> chọn <b>Bán máy</b>, nhập tên khách, mã máy và giá bán.</li>
     <li><b>Khách trả tiền:</b> chọn <b>Thu tiền</b>, nhập tên khách và số tiền. Trang tự trừ để ra số còn lại.</li>
     <li><b>Xem riêng từng khách:</b> gõ tên (không cần dấu) vào ô trên cùng, hoặc bấm tên trong bảng.</li>
-    <li><b>Đồng bộ:</b> mọi thiết bị kết nối cùng một Google Sheets sẽ thấy cùng dữ liệu. Trang tự cập nhật mỗi 20 giây.</li>
+    <li><b>Đồng bộ:</b> mọi thiết bị kết nối cùng một Google Sheets sẽ thấy cùng dữ liệu. Trang tự cập nhật mỗi 20 giây. <b>Hai chiều:</b> giao dịch nhập trên trang sẽ hiện trong tab GiaoDich, và dòng bạn nhập hoặc sửa trực tiếp trong Google Sheets cũng hiện trên trang (bấm Làm mới để thấy ngay).</li>
     <li>Cột "Người nhập" cho biết ai đã ghi giao dịch. Bạn cũng xem được toàn bộ dữ liệu ngay trong Google Sheets.</li>
   </ol>
 </details>
@@ -179,16 +180,37 @@ function refreshNames(){$("names").innerHTML=names().map(function(x){return'<opt
 /* ---------- kết nối Google Sheets ---------- */
 function loadCfg(){try{cfg=JSON.parse(localStorage.getItem(CFGK)||"null")}catch(e){cfg=null}if(cfg&&(!cfg.url||!cfg.key))cfg=null}
 function errMsg(e){var m=e&&e.message||"";return m==="auth"?"Mật khẩu kết nối không đúng.":(m==="not_found"?"Giao dịch này không còn trong sổ (có thể người khác đã xoá).":"Không kết nối được Google Sheets. Kiểm tra mạng, địa chỉ Web app và thử lại.")}
-function fetchList(c){return fetch(c.url+(c.url.indexOf("?")<0?"?":"&")+"key="+encodeURIComponent(c.key)+"&t="+Date.now(),{redirect:"follow"}).then(function(r){return r.json()}).then(function(j){if(!j.ok)throw new Error(j.error||"loi");return j.data.filter(okRec)})}
+var MON={Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12};
+function fixDate(d){
+  if(typeof d!=="string")return d;
+  if(/^\d{4}-\d{2}-\d{2}$/.test(d))return d;
+  var m=d.match(/^[A-Za-z]{3} ([A-Za-z]{3}) (\d{1,2}) (\d{4})/);
+  if(m&&MON[m[1]])return m[3]+"-"+("0"+MON[m[1]]).slice(-2)+"-"+("0"+m[2]).slice(-2);
+  var n=d.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(n)return n[1]+"-"+("0"+n[2]).slice(-2)+"-"+("0"+n[3]).slice(-2);
+  n=d.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})/);
+  if(n)return n[3]+"-"+("0"+n[2]).slice(-2)+"-"+("0"+n[1]).slice(-2);
+  return d;
+}
+function fetchList(c){return fetch(c.url+(c.url.indexOf("?")<0?"?":"&")+"key="+encodeURIComponent(c.key)+"&t="+Date.now(),{redirect:"follow"}).then(function(r){return r.json()}).then(function(j){if(!j.ok)throw new Error(j.error||"loi");return {list:j.data.map(function(x){x.date=fixDate(x.date);return x}).filter(okRec),skipped:j.skipped||[],url:j.sheetUrl||"",hint:j.hint||""}})}
 function api(action,payload){
   var b=Object.assign({key:cfg.key,action:action},payload||{});
   return fetch(cfg.url,{method:"POST",body:JSON.stringify(b),redirect:"follow"}).then(function(r){return r.json()}).then(function(j){if(!j.ok)throw new Error(j.error||"loi");return j});
 }
+var sheetUrl="";
+function applyRes(res){
+  data=res.list;loaded=true;
+  if(res.url){sheetUrl=res.url;$("openSheet").style.display=""}
+  var msg="";
+  if(res.skipped.length){msg="⚠️ Có "+res.skipped.length+" dòng trong Google Sheets chưa đọc được nên chưa hiện trên trang: "+res.skipped.slice(0,5).map(function(x){return"dòng "+x.row+" ("+x.why+")"}).join("; ")+(res.skipped.length>5?"…":"")+". Hãy sửa các dòng này trong Google Sheets rồi bấm Làm mới."}
+  else if(res.hint){msg=res.hint}
+  setStatus(msg);
+}
 function pull(quiet){
   if(!cfg)return Promise.resolve();
-  return fetchList(cfg).then(function(list){
-    data=list;loaded=true;setStatus("");
-    var d=new Date();$("sync").textContent="đã đồng bộ lúc "+("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);
+  return fetchList(cfg).then(function(res){
+    applyRes(res);
+    var d=new Date();$("sync").textContent="đã đồng bộ lúc "+("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2)+" · "+data.length+" giao dịch";
     refreshNames();render();checkLegacy();
   }).catch(function(e){if(!quiet){loaded=true;setStatus(errMsg(e));render()}else{$("sync").textContent="mất kết nối"}})
 }
@@ -199,14 +221,15 @@ $("cSave").onclick=function(){
   if(!c.key){$("cErr").textContent="Vui lòng nhập mật khẩu kết nối.";return}
   if(!c.user){$("cErr").textContent="Vui lòng nhập tên của bạn.";return}
   $("cErr").textContent="Đang kết nối…";$("cSave").disabled=true;
-  fetchList(c).then(function(list){
+  fetchList(c).then(function(res){
     cfg=c;try{localStorage.setItem(CFGK,JSON.stringify(cfg))}catch(e){}
     $("cErr").textContent="";$("cfgCard").style.display="none";$("cKey").value="";
-    data=list;loaded=true;setStatus("");refreshNames();render();checkLegacy();startPoll();toast("Đã kết nối Google Sheets");
+    applyRes(res);refreshNames();render();checkLegacy();startPoll();toast("Đã kết nối Google Sheets");
   }).catch(function(e){$("cErr").textContent=errMsg(e)}).then(function(){$("cSave").disabled=false});
 };
 function startPoll(){if(window._poll)return;window._poll=setInterval(function(){if(document.visibilityState==="visible"&&!busy)pull(true)},20000)}
 document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible"&&cfg&&!busy)pull(true)});
+$("openSheet").onclick=function(){if(sheetUrl)window.open(sheetUrl,"_blank")};
 $("refresh").onclick=function(){if(!cfg){$("cfgCard").style.display="";return}$("sync").textContent="đang tải…";pull(false)};
 
 /* ---------- nhập dữ liệu cũ trên thiết bị này ---------- */
